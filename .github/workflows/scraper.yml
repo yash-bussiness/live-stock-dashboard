@@ -1,0 +1,79 @@
+name: Scheduled Scraper
+
+on:
+  schedule:
+    # Every 30 minutes between 03:43 to 10:15 UTC (which is 09:13 to 15:45 IST), Monday to Friday
+    - cron: '13,43 3 * * 1-5'
+    - cron: '13,43 4 * * 1-5'
+    - cron: '13,43 5 * * 1-5'
+    - cron: '13,43 6 * * 1-5'
+    - cron: '13,43 7 * * 1-5'
+    - cron: '13,43 8 * * 1-5'
+    - cron: '13,43 9 * * 1-5'
+    - cron: '13 10 * * 1-5'  # final run at 3:43 PM IST
+
+  workflow_dispatch:
+
+jobs:
+  scrape-and-commit:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Check IST Time Window and Weekday
+        id: timecheck
+        run: |
+          CURRENT_HOUR=$(date -u +%H)
+          CURRENT_MINUTE=$(date -u +%M)
+          CURRENT_DAY=$(date -u +%u)
+
+          if [[ $CURRENT_DAY -ge 6 ]]; then
+            echo "It's weekend. Skipping job."
+            echo "run_scrapers=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          IST_HOUR=$(( (10#$CURRENT_HOUR + 5 + (10#$CURRENT_MINUTE + 30) / 60) % 24 ))
+          IST_MINUTE=$(( (10#$CURRENT_MINUTE + 30) % 60 ))
+          IST_TOTAL_MINUTES=$((IST_HOUR * 60 + IST_MINUTE))
+          START_MINUTES=$((9 * 60 + 13))
+          END_MINUTES=$((15 * 60 + 45))
+
+          echo "Current IST time: $(printf "%02d" $IST_HOUR):$(printf "%02d" $IST_MINUTE)"
+
+          if [[ $IST_TOTAL_MINUTES -lt $START_MINUTES || $IST_TOTAL_MINUTES -gt $END_MINUTES ]]; then
+            echo "Outside allowed time range. Skipping."
+            echo "run_scrapers=false" >> $GITHUB_OUTPUT
+          else
+            echo "run_scrapers=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Scrapers
+        if: steps.timecheck.outputs.run_scrapers == 'true'
+        run: |
+          node scripts/scrape-chartlink.js
+          node scripts/scrape-advdec.js
+          #node scripts/scrape-newhl.js
+          node scripts/scrape-sma50.js
+          node scripts/scrape-sma200.js
+          node scripts/scrape-sentiment.js
+          #node scripts/scrape-fii.js
+          #node scripts/scrape-heatmap.js
+
+      - name: Commit and Push
+        if: steps.timecheck.outputs.run_scrapers == 'true'
+        run: |
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          git add data/
+          git commit -m "Update scraped data" || echo "No changes"
+          git push
